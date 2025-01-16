@@ -32,10 +32,6 @@
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
     </PropertyGroup>
-    <PropertyGroup>
-      <PostBuildEvent>mkdir "C:\Program Files (x86)\Steam\steamapps\common\Subnautica\BepInEx\plugins\SubmersedVRTweaks"
-copy /Y "C:\Users\Christopher\Documents\.Projects\SubnauticaMods\SubmersedVRTweaks\bin\Debug\SubmersedVRTweaks.dll" "C:\Program Files (x86)\Steam\steamapps\common\Subnautica\BepInEx\plugins\SubmersedVRTweaks"</PostBuildEvent>
-    </PropertyGroup>
     <ItemGroup>
         <Reference Include="0Harmony">
           <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Subnautica\BepInEx\core\0Harmony.dll</HintPath>
