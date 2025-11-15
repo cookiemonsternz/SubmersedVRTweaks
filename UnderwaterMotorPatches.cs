@@ -15,6 +15,7 @@ namespace SubmersedVRTweaks
     [HarmonyPatch(typeof(ArmsController))]
     public class UnderwaterMotorPatchFunctions
     {
+        private const string VRCameraRigTypeName = "SubmersedVR.VRCameraRig, SubmersedVR";
         private static FieldInfo _rightControllerField;
         // Caches so that we don't have to search for them every time UpdateMove() is called
         private static UnityEngine.Object _vrCameraRig;
@@ -25,63 +26,136 @@ namespace SubmersedVRTweaks
         [HarmonyPostfix]
         static void CacheVRComponents()
         {
+            TryCacheVRComponents(logOnFailure: false);
+        }
+
+        private static void TryCacheVRComponents(bool logOnFailure = true)
+        {
             // Need this because VRCameraRig is an internal class
-            Type typeVRCameraRig = Type.GetType("SubmersedVR.VRCameraRig, SubmersedVR");
-            if (typeVRCameraRig != null)
+            Type typeVRCameraRig = Type.GetType(VRCameraRigTypeName);
+            if (typeVRCameraRig == null)
             {
-                // Get the field for the right controller from the vr camera rig
-                _rightControllerField = typeVRCameraRig.GetField("rightController", 
-                    BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
-                // cache the instances of the camera rig and player
-                _vrCameraRig = GameObject.FindObjectOfType(Type.GetType("SubmersedVR.VRCameraRig, SubmersedVR"));
+                if (logOnFailure)
+                {
+                    SubmersedVRTweaksPlugin.Log.LogError("VRCameraRig type could not be found. Is SubmersedVR installed?");
+                }
+                return;
+            }
+
+            _rightControllerField ??= typeVRCameraRig.GetField("rightController",
+                BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
+
+            if (_vrCameraRig == null)
+            {
+                _vrCameraRig = GameObject.FindObjectOfType(typeVRCameraRig);
+            }
+
+            if (_playerCache == null)
+            {
                 _playerCache = GameObject.FindObjectOfType<Player>();
             }
+        }
+
+        private static Player GetPlayer()
+        {
+            if (_playerCache == null)
+            {
+                _playerCache = GameObject.FindObjectOfType<Player>();
+            }
+
+            return _playerCache;
+        }
+
+        private static bool ShouldUseHandSteering()
+        {
+            bool steerUnderWater = SubmersedVRTweaksPlugin.ModOptions?.SteerWithHandUnderWater == true;
+            bool steerSeaglide = SubmersedVRTweaksPlugin.ModOptions?.SteerWithHandForSeaglide == true;
+
+            if (!steerUnderWater && !steerSeaglide)
+            {
+                return false;
+            }
+
+            if (steerUnderWater)
+            {
+                return true;
+            }
+
+            Player player = GetPlayer();
+            return player != null && player.motorMode == Player.MotorMode.Seaglide;
+        }
+
+        private static bool TryGetRightController(out GameObject rightController)
+        {
+            rightController = null;
+
+            if (_not_working)
+            {
+                return false;
+            }
+
+            if (_vrCameraRig == null || _rightControllerField == null)
+            {
+                TryCacheVRComponents();
+            }
+
+            if (_vrCameraRig == null || _rightControllerField == null)
+            {
+                SubmersedVRTweaksPlugin.Log.LogError("VRCameraRig/rightController field not found. Have you installed SubmersedVR?");
+                _not_working = true;
+                return false;
+            }
+
+            try
+            {
+                rightController = _rightControllerField.GetValue(_vrCameraRig) as GameObject;
+            }
+            catch (TargetException ex)
+            {
+                SubmersedVRTweaksPlugin.Log.LogError($"Failed to read rightController from VRCameraRig: {ex.Message}");
+                _not_working = true;
+                return false;
+            }
+
+            if (rightController == null)
+            {
+                SubmersedVRTweaksPlugin.Log.LogError("Right Controller not found! Have you installed SubmersedVR?");
+                _not_working = true;
+                return false;
+            }
+
+            return true;
         }
         
         public static Vector3 get_rotation(Quaternion playerForward, Vector3 inputDirectionNoY)
         {
-            if (_not_working)
+            // Default implementation, if submersed isn't installed the game won't just break
+            if (_not_working || !ShouldUseHandSteering())
             {
-                return playerForward * inputDirectionNoY; 
+                return playerForward * inputDirectionNoY;
             }
-            // Check that caching succeeded
-            if (_vrCameraRig != null && _rightControllerField != null && _playerCache != null && SubmersedVRTweaksPlugin.ModOptions.SteerWithHandForSeaglide || SubmersedVRTweaksPlugin.ModOptions.SteerWithHandUnderWater)
+
+            if (!TryGetRightController(out GameObject rightController))
             {
-                // Get the rightController GameObject (using reflection bc internal...)
-                GameObject rightController = _rightControllerField.GetValue(_vrCameraRig) as GameObject;
-                
-                if (rightController != null)
-                {
-                    // fix rotation, by default when pressing forward you go up 45 degrees as well
-                    Quaternion rotationOffset;
-                    
-                    if (_playerCache != null && _playerCache.motorMode == Player.MotorMode.Seaglide && SubmersedVRTweaksPlugin.ModOptions.SteerWithHandForSeaglide)
-                    {
-                        // seaglide is weird as well, this seems to work
-                        rotationOffset = Quaternion.Euler(60f, 0f, 0f);
-                        return rightController.transform.rotation * rotationOffset * inputDirectionNoY;
-                    }
-                    else if (SubmersedVRTweaksPlugin.ModOptions.SteerWithHandUnderWater)
-                    {
-                        // rotate 45 degrees down so when going straight forwards it is just straight forwards
-                        rotationOffset = Quaternion.Euler(45f, 0f, 0f);
-                        return rightController.transform.rotation * rotationOffset * inputDirectionNoY;
-                    }
-                }
-                else
-                {
-                    SubmersedVRTweaksPlugin.Log.LogError("Right Controller not found! Have you installed SubmersedVR?");
-                    _not_working = true;
-                }
+                return playerForward * inputDirectionNoY;
+            }
+
+            // fix rotation, by default when pressing forward you go up 45 degrees as well
+            Quaternion rotationOffset;
+            Player player = GetPlayer();
+
+            if (player != null && player.motorMode == Player.MotorMode.Seaglide && SubmersedVRTweaksPlugin.ModOptions?.SteerWithHandForSeaglide == true)
+            {
+                // seaglide is weird as well, this seems to work
+                rotationOffset = Quaternion.Euler(60f, 0f, 0f);
             }
             else
             {
-                SubmersedVRTweaksPlugin.Log.LogError("VRCameraRig not found! Have you installed SubmersedVR?");
-                _not_working = true;
+                // rotate 45 degrees down so when going straight forwards it is just straight forwards
+                rotationOffset = Quaternion.Euler(45f, 0f, 0f);
             }
-            
-            // Default implementation, if submersed isn't installed the game won't just break
-            return playerForward * inputDirectionNoY;
+
+            return rightController.transform.rotation * rotationOffset * inputDirectionNoY;
         }
     }
 
